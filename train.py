@@ -17,7 +17,14 @@ from lib.train_recoder import Logger, file_backup
 from lib.GaussianRender import pts2render
 from lib.gs_utils.loss_utils import l1_loss, ssim
 from lib.gs_utils.image_utils import psnr
-from pytorch3d.loss import chamfer_distance
+
+
+def chamfer_distance(x, y, max_dist=1.0):
+    # paper Eq. 18: mean nearest-neighbour L2 distance (not squared as pytorch3d's default) in both directions.
+    # Distances are clamped so that a few points unprojected to near-infinite depth (disparity ~ 0) cannot
+    # dominate the gradient; with squared distances such points blew up DyNeRF training.
+    d = torch.cdist(x, y)
+    return d.min(2)[0].clamp(max=max_dist).mean() + d.min(1)[0].clamp(max=max_dist).mean(), None
 
 import trimesh 
 import torch
@@ -104,11 +111,11 @@ class Trainer:
 
             Ll1 = l1_loss(render_novel, gt_novel)
             Lssim = 1.0 - ssim(render_novel, gt_novel)
-            loss = 0.8 * Ll1 + 0.2 * Lssim + 0.5 * chamfer_loss 
+            loss = 0.8 * Ll1 + 0.2 * Lssim + self.cfg.chamfer_weight * chamfer_loss
 
             log_l1 += 0.8 * Ll1.item()
             log_ssim += 0.2 * Lssim.item()
-            log_chamfer += 0.5 * chamfer_loss.item() if if_chamfer and itr_>iter_from else 0 
+            log_chamfer += self.cfg.chamfer_weight * chamfer_loss.item() if if_chamfer and itr_>iter_from else 0 
             log_scale += 0.5 * data['novel_view']['scale_regular'].item() if if_scale else 0
 
             if self.total_steps and self.total_steps % self.cfg.record.loss_freq == 0:
@@ -117,17 +124,20 @@ class Trainer:
             metrics.update({
                 'l1': Ll1.item(),
                 'ssim': Lssim.item(),
-                'chamfer': 0.5*chamfer_loss.item() if if_chamfer and itr_>iter_from else 0
+                'chamfer': self.cfg.chamfer_weight * chamfer_loss.item() if if_chamfer and itr_>iter_from else 0
             })
             self.logger.push(metrics)
 
-            self.scaler.scale(loss).backward()
-            self.scaler.unscale_(self.optimizer)
-            torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
+            if torch.isfinite(loss):
+                self.scaler.scale(loss).backward()
+                self.scaler.unscale_(self.optimizer)
+                torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
 
-            self.scaler.step(self.optimizer)
+                self.scaler.step(self.optimizer)
+                self.scaler.update()
+            else:
+                logging.warning(f"non-finite loss at step {self.total_steps}, skipped")
             self.scheduler.step()
-            self.scaler.update()
 
             if self.total_steps and self.total_steps % self.cfg.record.eval_freq == 0:
                 self.model.eval()
@@ -237,8 +247,12 @@ if __name__ == '__main__':
     logging.basicConfig(level=logging.INFO,
                         format='%(asctime)s %(levelname)-8s [%(filename)s:%(lineno)d] %(message)s')
 
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--cfg', type=str, default='config/stage.yaml')
+    arg = parser.parse_args()
+
     cfg = config()
-    cfg.load("config/stage.yaml")
+    cfg.load(arg.cfg)
     cfg = cfg.get_cfg()
 
     cfg.defrost()

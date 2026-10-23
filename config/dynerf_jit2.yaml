@@ -1,0 +1,38 @@
+name: 'gps_plus_dynerf_jit2'
+
+lr: 0.00005
+wdecay: 1e-5
+batch_size: 1
+num_steps: 20000
+chamfer_weight: 0.005
+stage1_ckpt: './experiments/gps_plus_dynerf_it8_1007/ckpt/gps_plus_dynerf_it8_stopped.pth'
+
+dataset:
+  source_id: [0, 1]
+  train_novel_id: [2, 3, 4, 5]
+  val_novel_id: [2, 3]
+  use_hr_img: False
+  use_depth_init: True
+  use_local_data: True
+  inverse_depth_init: 0.5
+  inverse_depth_init_jitter: 0.3
+  local_data_root: './GPS_plus_data'       # TODO
+  train_data_root: './GPS_plus_data/train'
+  val_data_root: './GPS_plus_data/val'
+
+raft:
+  mixed_precision: False
+  train_iters: 8
+  val_iters: 8
+  encoder_dims: [32, 48, 96]  
+  hidden_dims: [96, 96, 96]  
+
+gsnet:
+  encoder_dims: [32, 48, 96]
+  decoder_dims: [48, 64, 96]
+  parm_head_dim: 32
+
+record:
+  loss_freq: 1000
+  eval_freq: 1000
+  save_iter: [2000, 4000, 6000, 8000, 10000, 12000, 14000, 16000, 18000]

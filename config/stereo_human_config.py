@@ -11,6 +11,7 @@ class ConfigStereoHuman:
         self.cfg.wdecay = 0.0
         self.cfg.batch_size = 0
         self.cfg.num_steps = 0
+        self.cfg.chamfer_weight = 0.5  # paper: 0.5, 0.005 for DyNeRF (large depth range)
 
         self.cfg.dataset = CN()
         self.cfg.dataset.source_id = None
@@ -29,6 +30,8 @@ class ConfigStereoHuman:
         self.cfg.dataset.trans = [0.0, 0.0, 0.0]
         self.cfg.dataset.scale = 1.0
         self.cfg.dataset.inverse_depth_init = 1.0
+        # train only: scale the init by exp(U(-j, j)) per sample so stereo matching cannot rely on the init alone
+        self.cfg.dataset.inverse_depth_init_jitter = 0.0
 
         self.cfg.raft = CN()
         self.cfg.raft.mixed_precision = None

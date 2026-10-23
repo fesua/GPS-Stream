@@ -13,7 +13,7 @@ dataset:
   use_depth_init: True
   use_local_data: True
   inverse_depth_init: 0.3
-  local_data_root: '/PATH/TO/data'       # TODO
+  local_data_root: './GPS_plus_data'       # TODO
   train_data_root: '/PATH/TO/data/train' # TODO
   val_data_root: '/PATH/TO/data/val'     # TODO
 

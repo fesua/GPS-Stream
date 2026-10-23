@@ -183,8 +183,11 @@ class StereoHumanDataset(Dataset):
         
         H_s, W_s, _ = img0.shape
         
-        depth_init0 = self.opt.inverse_depth_init * np.ones((H_s, W_s))
-        depth_init1 = self.opt.inverse_depth_init * np.ones((H_s, W_s))
+        inv_depth_init = self.opt.inverse_depth_init
+        if self.phase == 'train' and self.opt.inverse_depth_init_jitter > 0:
+            inv_depth_init *= np.exp(np.random.uniform(-1, 1) * self.opt.inverse_depth_init_jitter)
+        depth_init0 = inv_depth_init * np.ones((H_s, W_s))
+        depth_init1 = inv_depth_init * np.ones((H_s, W_s))
         rect0 = stereo_data['camera']['intr0'], depth_init0
         rect1 = stereo_data['camera']['intr1'], depth_init1
         flow0, flow1 = stereo_depth2flow(rect0, rect1, stereo_data['camera']['Tf_x'])

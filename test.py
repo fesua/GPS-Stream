@@ -74,6 +74,15 @@ class Trainer:
                 data, _, _ = self.model(data, is_train=False)
                 data = pts2render(data, bg_color=self.cfg.dataset.bg_color)
 
+                if self.cfg.save_mask:
+                    # valid region of the novel view: rendered opacity from a black and a white background
+                    black = data['novel_view']['img_pred'].clone()
+                    white = pts2render(data, bg_color=[1, 1, 1])['novel_view']['img_pred']
+                    alpha = 1 - (white - black).mean(1)[0]
+                    tmp_mask_name = '%s/%s_%02d_mask.png' % (cfg.record.show_path, s_name[0], view_id)
+                    cv2.imwrite(tmp_mask_name, ((alpha > 0.5) * 255).byte().cpu().numpy())
+                    data['novel_view']['img_pred'] = black
+
                 tmp_novel = data['novel_view']['img_pred'][0].detach()
                 tmp_novel *= 255
                 tmp_novel = tmp_novel.permute(1, 2, 0).cpu().numpy()
@@ -133,6 +142,11 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('-i', '--input', type=str, required=True, help='input sequence') # 'example_data'
     parser.add_argument('-v', '--view', type=int, required=True, help='valid view')      # 3
+    parser.add_argument('--exp', type=str, default='gps_plus', help='output: experiments/<exp>/show_<input>_process')
+    parser.add_argument('--inv_depth', type=float, default=None, help='override dataset.inverse_depth_init')
+    parser.add_argument('--ckpt', type=str, default='/home/imlab/다운로드/gps_plus_final.pth')
+    parser.add_argument('--save_mask', action='store_true', help='also save the valid-region mask of each render')
+    parser.add_argument('--iters', type=int, default=None, help='override raft.val_iters (match the training)')
     arg = parser.parse_args()
 
     for seq_name in [arg.input+'_process']:
@@ -143,11 +157,16 @@ if __name__ == '__main__':
 
             cfg.defrost()
             dt = datetime.today()
-            cfg.exp_name = 'gps_plus' # TODO
+            cfg.exp_name = arg.exp
+            if arg.inv_depth is not None:
+                cfg.dataset.inverse_depth_init = arg.inv_depth
             cfg.record.show_path = "experiments/%s/show_%s" % (cfg.exp_name, seq_name)
             cfg.seq_name = seq_name 
             cfg.dataset.val_novel_id = [views_n] 
-            cfg.restore_ckpt = 'PATH/TO/gps_plus_latest.pth' # TODO
+            cfg.restore_ckpt = arg.ckpt
+            cfg.save_mask = arg.save_mask
+            if arg.iters is not None:
+                cfg.raft.val_iters = arg.iters
 
             cfg.freeze()
             print(cfg.restore_ckpt)

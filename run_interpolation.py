@@ -1,6 +1,7 @@
 from __future__ import print_function, division
 
 import argparse
+import time
 import logging
 
 import numpy as np
@@ -50,8 +51,7 @@ def read_calib(calib):
     extr[:3, 3:] = T
     intr = np.zeros((3, 3))
     intr[:3, :3] = np.array(calib['K']).reshape((3, 3))
-    H = 2048
-    W = 1500
+    W, H = calib.get('imgSize', [1500, 2048])
     if W>H:
         intr[0, 2] -= (W - H) / 2
         intr[:2] *= RS / H
@@ -247,6 +247,17 @@ if __name__ == '__main__':
     # python run_interpolation.py -i example_data
     parser = argparse.ArgumentParser()
     parser.add_argument('-i', '--input', type=str, required=True, help='input sequence') # 'zymlqj'
+    parser.add_argument('--cams', type=str, nargs=4, default=['22139908', '22139909', '22139914', '22139906'],
+                        help='source cameras of work sets s1-s3: s1 = cams[0]->cams[1], s2 = cams[1]->cams[2], s3 = cams[2]->cams[3]')
+    parser.add_argument('--end_frame', type=int, default=60)
+    parser.add_argument('--exp', type=str, default='gps_plus', help='output: experiments/<exp>/show_free_<input>')
+    parser.add_argument('--inv_depth', type=float, default=None, help='override dataset.inverse_depth_init')
+    parser.add_argument('--ckpt', type=str, default='/home/imlab/다운로드/gps_plus_final.pth')
+    parser.add_argument('--iters', type=int, default=None, help='override RAFT iterations (match the training)')
+    parser.add_argument('--trt', type=str, default=None, help='TensorRT engine from export_trt.py for the source pair')
+    parser.add_argument('--fixed', type=int, nargs=2, default=None, metavar=('SET', 'VIEW'),
+                        help='render every frame from one interpolated camera: work set 1-3, view 0-19 '
+                             '(0 = left source, 10 = midpoint) -> experiments/<exp>/show_fixed_<input>_s<SET>_v<VIEW>')
     arg = parser.parse_args()
     
     tar_n = arg.input
@@ -260,10 +271,19 @@ if __name__ == '__main__':
 
     cfg.defrost()
     dt = datetime.today()
-    cfg.exp_name = 'gps_plus' # TODO
+    cfg.exp_name = arg.exp
+    if arg.inv_depth is not None:
+        cfg.dataset.inverse_depth_init = arg.inv_depth
 
     cfg.record.show_path = "experiments/%s/show_free_%s" % (cfg.exp_name, tar_n)
-    cfg.restore_ckpt = 'PATH/TO/gps_plus_latest.pth' # TODO
+    if arg.fixed:
+        cfg.record.show_path = "experiments/%s/show_fixed_%s_s%d_v%02d" % (cfg.exp_name, tar_n, *arg.fixed)
+    if arg.trt:
+        cfg.record.show_path += '_trt'
+    cfg.restore_ckpt = arg.ckpt
+    if arg.iters is not None:
+        # StereoHumanModel.model(data) runs the is_train branch, which uses train_iters
+        cfg.raft.val_iters = cfg.raft.train_iters = arg.iters
     cfg.freeze()
     LOOP_NUM = 20
 
@@ -275,19 +295,19 @@ if __name__ == '__main__':
     RS = 1024
     data_root = cfg.dataset.val_data_root
     
-    novel_extrs, novel_intrs = extr_interpolate(RS, ['22139908', '22139909'], 1)
+    novel_extrs, novel_intrs = extr_interpolate(RS, arg.cams[0:2], 1)
     print(len(novel_extrs[0]))
     
     render = StereoHumanModel(cfg, cfg.restore_ckpt,\
         [novel_extrs[0]], novel_intrs, 1)
     
-    novel_extrs, novel_intrs = extr_interpolate(RS, ['22139909', '22139914'], 2)
+    novel_extrs, novel_intrs = extr_interpolate(RS, arg.cams[1:3], 2)
     print(len(novel_extrs[0]))
 
     render2 = StereoHumanModel(cfg, cfg.restore_ckpt,\
         [novel_extrs[0]], novel_intrs, 2)
     
-    novel_extrs, novel_intrs = extr_interpolate(RS, ['22139914', '22139906'], 3)
+    novel_extrs, novel_intrs = extr_interpolate(RS, arg.cams[2:4], 3)
     print(len(novel_extrs[0]))
 
     render3 = StereoHumanModel(cfg, cfg.restore_ckpt,\
@@ -296,35 +316,58 @@ if __name__ == '__main__':
     cut = 100
     tar_ply = -10
     start_frame = 0
-    end_frame = 60
+    end_frame = arg.end_frame
 
+    trt_net = None
+    if arg.trt:
+        from export_trt import TrtSourceNet, source_inputs, fill_gaussians
+        trt_net = TrtSourceNet(arg.trt)
+
+    def infer(stereo_model, data):
+        if trt_net is not None:
+            return fill_gaussians(data, *trt_net(source_inputs(data)))
+        return stereo_model.model(data)
+
+    frame_ms = []
     for fr_i in tqdm(range(start_frame, end_frame)):
+        torch.cuda.synchronize()
+        t_frame = time.perf_counter()
         wi_ct = fr_i // LOOP_NUM
         scene_id = (wi_ct) % 6
         with torch.no_grad():
-            if scene_id == 0:
+            if arg.fixed:
+                fixed_render = [render, render2, render3][arg.fixed[0] - 1]
+                data = fixed_render.get_item_free(fr_i, arg.fixed[1])
+                out = infer(fixed_render, data)
+            elif scene_id == 0:
                 data = render.get_item_free(fr_i, fr_i % LOOP_NUM)
-                out = render.model(data)
+                out = infer(render, data)
             elif scene_id == 1:
                 data = render2.get_item_free(fr_i, fr_i % LOOP_NUM)
-                out = render2.model(data)
+                out = infer(render2, data)
             elif scene_id == 2:
                 data = render3.get_item_free(fr_i, fr_i % LOOP_NUM)
-                out = render3.model(data)
+                out = infer(render3, data)
             elif scene_id == 3:
                 data = render3.get_item_free(fr_i, (LOOP_NUM-1) - (fr_i % LOOP_NUM))
-                out = render3.model(data)
+                out = infer(render3, data)
             elif scene_id == 4:
                 data = render2.get_item_free(fr_i, (LOOP_NUM-1) - (fr_i % LOOP_NUM))
-                out = render2.model(data)
+                out = infer(render2, data)
             elif scene_id == 5:
                 data = render.get_item_free(fr_i, (LOOP_NUM-1) - (fr_i % LOOP_NUM))
-                out = render.model(data)
+                out = infer(render, data)
             else:
                 exit()
             data = pts2render(data, bg_color=cfg.dataset.bg_color) 
+            torch.cuda.synchronize()
+            frame_ms.append((time.perf_counter() - t_frame) * 1000)
             tmp_novel = data['novel_view']['img_pred'][0].detach()
             tmp_novel *= 255
             tmp_novel = tmp_novel.permute(1, 2, 0).cpu().numpy()
             tmp_img_name = '%s/%03d.jpg' % (cfg.record.show_path, fr_i)
             cv2.imwrite(tmp_img_name, tmp_novel[cut:(RS-cut), cut:(RS-cut), ::-1].astype(np.uint8))
+
+    # image loading + network + rendering, first frames excluded as warm-up
+    print('%s: %.1f ms per frame (%.1f FPS), image loading included'
+          % ('TensorRT ' + arg.trt if arg.trt else 'PyTorch', np.median(frame_ms[5:]), 1000 / np.median(frame_ms[5:])))
