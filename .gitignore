@@ -1,0 +1,12 @@
+# outputs: checkpoints, TensorRT engines / ONNX, renders, metrics, logs (experiments/ is ~47 GB)
+experiments/
+runs/
+*.engine
+*.onnx
+*.pth
+*.mp4
+# data (local copy / symlinks)
+GPS_plus_data/
+# python caches
+__pycache__/
+*.pyc
