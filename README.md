@@ -1,163 +1,108 @@
-<div align="center">
+# GPS-Stream
 
-# <b>GPS-Gaussian+</b>: Generalizable Pixel-Wise 3D Gaussian Splatting for Real-Time Human-Scene Rendering from Sparse Views
+GPS-Stream turns [GPS-Gaussian+](https://github.com/YaourtB/GPS_plus), a feed-forward model that reconstructs a scene as pixel-wise 3D Gaussians
+from one rectified stereo pair, into a streaming model for stereo video. Instead of reconstructing every frame from scratch, it updates only the
+parts of the scene that changed since the last frame and keeps the rest. This makes it real-time and temporally consistent: static content no
+longer flickers, because it is not re-estimated every frame.
 
-[Boyao Zhou](https://yaourtb.github.io)<sup>1*</sup>, [Shunyuan Zheng](https://shunyuanzheng.github.io)<sup>2*</sup><sup>&dagger;</sup>, [Hanzhang Tu](https://itoshiko.com/)<sup>1</sup>, [Ruizhi Shao](https://dsaurus.github.io/saurus)<sup>1</sup>, [Boning Liu](https://liuboning2.github.io)<sup>1</sup>, [Shengping Zhang](http://homepage.hit.edu.cn/zhangshengping)<sup>2&#x2709;</sup>, [Liqiang Nie](https://liqiangnie.github.io)<sup>2</sup>, [Yebin Liu](https://www.liuyebin.com)<sup>1</sup>
+**29.8 ms/frame on an RTX 3090 (vs. 35.0 ms per-frame) at −0.16 dB PSNR, with 30% better temporal consistency (tOF 0.230 vs. 0.328).**
 
-<p><sup>1</sup>Tsinghua Univserity &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<sup>2</sup>Harbin Institute of Technology
- <br>*Equal contribution<sup>&nbsp;&nbsp;&dagger;</sup>Work done during an internship at Tsinghua University&nbsp;&nbsp;<sup>&#x2709</sup>Corresponding author
-  
-### [Projectpage](https://yaourtb.github.io/GPS-Gaussian+) · [Paper](https://arxiv.org/pdf/2411.11363) · [Dataset](https://docs.google.com/forms/d/e/1FAIpQLSexKlYfpUFcgnKM7EYoIFWi7P3J1InlHyTC82ehqka2hTiwmA/viewform?usp=dialog)
-</div>
+![Per-frame and GPS-Stream renders, with a zoom on a static kitchen torch](docs/assets/compare.gif)
 
-## Introduction
+## Quick start
 
-We present GPS-Gaussian+, a generalizable 3D Gaussian Splatting, for human-centered scene rendering from sparse views in a feed-forward manner.
+Tested with Python 3.10, PyTorch 2.0.1 (CUDA 11.8), TensorRT 10.13, RTX 3090.
 
-https://github.com/user-attachments/assets/c24eaf44-ca1f-438a-a538-5a7d5cb78f89
-
-
-## Installation
-
-To deploy and run GPS-Gaussian+, run the following scripts:
-```
-conda env create --file environment.yml
-conda activate gps_plus
-```
-Then, compile the ```diff-gaussian-rasterization``` in [3DGS](https://github.com/graphdeco-inria/gaussian-splatting) repository:
-```
+```bash
+conda env create --file enviroment.yml && conda activate gps_plus
 git clone https://github.com/graphdeco-inria/gaussian-splatting --recursive
-cd gaussian-splatting/
-pip install -e submodules/diff-gaussian-rasterization
-cd ..
-```
-(Optional) For training with geometry regulatization, install [pytorch3d](https://github.com/facebookresearch/pytorch3d/blob/main/INSTALL.md) for **chamfer_distance**. Otherwise, set ```if_chamfer = False``` in [train.py](train.py#L69).  
-
-## Data Preparation
-
-1. You can download our captured THumanMV dataset from [OneDrive](https://docs.google.com/forms/d/e/1FAIpQLSexKlYfpUFcgnKM7EYoIFWi7P3J1InlHyTC82ehqka2hTiwmA/viewform?usp=dialog). We provide 15 sequences of human performance captured in 10-camera setting. In our experiments, we split 10 cameras into 3 work sets: (1,2,3,4) (4,5,6,7) (7,8,9,10).
-
-2. We provide [step_0rect.py](data_process/step_0rect.py) for source view rectification and [step_1.py](data_process/step_1.py) for novel view processing. To prepare data, you set the correct path for ```data_root```(raw data) and ```processed_data_root```(processed data) in [step_0rect.py](data_process/step_0rect.py#L99) and [step_1.py](data_process/step_1.py#L13). Then you can run for example:
-```
-cd data_process
-python step_0rect.py -i s1a1 -t train
-python step_1.py -i s1a1 -t train
-
-python step_0rect.py -i s3a5 -t val
-python step_1.py -i s3a5 -t val
-
-python step_0rect.py -i s1a6 -t test
-python step_1.py -i s1a6 -t test
-cd ..
+pip install -e gaussian-splatting/submodules/diff-gaussian-rasterization
+pip install tensorrt-cu11==10.13.0.35 onnx lpips
 ```
 
-The processed dataset should be organized as follows: 
-```
-processed_data_root
-├── train/
-│   ├── img/
-│   │   ├── s1a1_s1_0000/
-│   │   │   ├── 0.jpg
-│   │   │   ├── 1.jpg
-│   │   │   ├── 2.jpg
-│   │   │   ├── 3.jpg
-│   │   │   ├── 4.jpg
-│   │   |   └── 5.jpg
-│   |   └── ...
-│   ├── mask/
-│   │   ├── s1a1_s1_0000/
-│   │   │   ├── 0.jpg
-│   │   │   ├── 1.jpg
-│   |   └── ...
-│   ├── parameter/
-│   │   ├── s1a1_s1_0000/
-│   │   │   ├── 0_1.json
-│   │   │   ├── 2_extrinsic.npy
-│   │   │   ├── 2_intrinsic.npy
-│   |   |   └── ...
-│   |   └── ...
-└──val
-│   ├── img/
-│   ├── mask/
-│   ├── parameter/
-└──test
-│   ├── s1a6_process/
-│   |   ├── img/
-│   |   ├── mask/
-│   |   ├── parameter/
+Download the pretrained weights (<!-- TODO: link -->) into `experiments/` and prepare the DyNeRF test scenes in `GPS_plus_data/test/` ([docs/training.md](docs/training.md#data)), then build the TensorRT engines for your GPU and render:
+
+```bash
+export PYTHONPATH=.
+python bench_trt_sparse.py --build --only enc
+python build_sparse_trt.py --teacher experiments/patch_sparse_ft128h4_rc4/ckpt/step8000.pth \
+    --out trt/sparse_ft128h4_rc4 --patch 128 --halo 4 --reg_margin 4
+python test_patch3.py --exp demo --mask stss --ckpt experiments/stss_patch64/ckpt/step4000.pth \
+    --patch 128 --exec sparse_trt --halo 4 --reg_cells 4 --reg_mode crop \
+    --engine experiments/gps_plus_dynerf_jit2_1007/trt/sparse_ft128h4_rc4 \
+    --teacher experiments/patch_sparse_ft128h4_rc4/ckpt/step8000.pth
 ```
 
-Note that 0-1.jpg are rectified input images and 2-5.jpg are images for supervision or evaluation. In particular, 4-5.jpg are original images of 0-1 views.
+Use `--exec sparse` for PyTorch, or `--exec perframe` without `--teacher` for the original network.
 
-## Test
+## Your own stereo video
 
-We provide the pretrained checkpoint in [OneDrive](https://mailtsinghuaeducn-my.sharepoint.com/:u:/g/personal/bzhou22_mail_tsinghua_edu_cn/ESZX7rn5BLNLtxqcwxW5SGwBA_Z_CBmxx5KoIgtI8lGLPA?e=HvtuTB) and 60-frame processed data in [OneDrive](https://mailtsinghuaeducn-my.sharepoint.com/:u:/g/personal/bzhou22_mail_tsinghua_edu_cn/EXeLFNTNDBxCgkmV3spUMugBjbGEL8QXBL3w7QGOoA7uAw?e=C8VqZa). You can directly put the downloaded data into ```/PATH/TO/processed_data_root/test/```. You furthermore modify ```local_data_root=/PATH/TO/processed_data_root/``` in [stage.yaml](config/stage.yaml#L16)
+<!-- TODO: input format, resolution constraints -->
 
-- For novel-view synthesis, you can set the checkpoint path in [test.py](test.py#L150) and pick a target view in 2-3.
-```
-python test.py -i example_data -v 2
-```
+Released weights are fine-tuned on DyNeRF only. For other scenes, fine-tuning is recommended; see [docs/training.md](docs/training.md).
 
-- For freeview rendering, you can set the checkpoint path and ```LOOP_NUM``` in [run_interpolation.py](run_interpolation.py#L268) for frames per work set.
-```
-python run_interpolation.py -i example_data
-```
+## Method
 
-You can check results in ```experiments\gps_plus```.
+Per-frame reconstruction spends most of its compute on content that did not change, and re-estimating that content every frame makes it
+flicker. GPS-Stream keeps the original network and its quality, and changes only what is computed each frame.
 
-## Train
+1. **Start frame.** The first frame runs the full per-frame network. It fills the state that later frames reuse: attention and context
+   features, depth, and the Gaussian maps of both views.
+2. **Change selection.** A lightweight selector (STSS, about 10k parameters) compares each 1/8-resolution encoder cell with that cell's
+   features at its last update, and marks the cells that changed. Comparing against the last update rather than the previous frame lets slow
+   changes accumulate until they are picked up.
+3. **128 px tiles.** Changed cells are grouped into 128 px tiles (16×16 cells), and only these tiles are recomputed. Fixed-size tiles let every
+   changed region run as one batch of equal-size crops, which is what the TensorRT engines are built for. On DyNeRF the updated tiles cover
+   about 20% of the image.
+4. **Context border.** Each tile is computed together with a 32 px (4-cell) border read from the stored maps, so the convolutions and the eight
+   recurrent depth updates see their neighbourhood. Only the tile core is written back.
+5. **Attention for tile cells only.** Epipolar attention runs only for the tile cells, but each still attends to the full row of the other view,
+   so the matching range is the original one.
+6. **Frozen normalisation statistics.** A crop cannot compute whole-image normalisation statistics, so the crop stages use the start frame's
+   statistics of each view. A recomputed tile then stays consistent with the stored maps around it.
+7. **Fine-tuning for the tile condition.** Crops see a zero-padded border and frozen statistics, which the original network was not trained
+   for. Fine-tuning it under this condition (8000 steps) keeps quality within 0.16 dB of the per-frame network.
+8. **TensorRT.** The encoder, the crop stages (dynamic batch) and the row-wise attention run as fp16 engines. The normalisation statistics are
+   an engine input, so one set of engines serves every sequence.
 
-Once you prepare all training data of 9 sequences and at least one sequence as validation data. You can modify ```train_data_root``` and ```val_data_root``` in [stage.yaml](config/stage.yaml#L17).
-```
-python train.py
-```
-If you would like to train our network with your own data, you can organize the dataset as above and set ```inverse_depth_init``` in [stage.yaml](config/stage.yaml#L15). We use ```inverse_depth_init = 0.3``` in our experiments for the largest depth of the scene is around 3.33 meters.
+## Performance
 
-## Train on Custom Data
+DyNeRF, 4 scenes × 3 sequences, 948 novel-view frames. Inference time on an RTX 3090, excluding rendering (~7 ms).
 
-### Custom Data Preparation
+| Configuration | PSNR / SSIM / LPIPS | tOF ↓ | TensorRT fp16 | PyTorch fp32 |
+|---|---|---|---|---|
+| Per-frame (original) | 29.31 / 0.9236 / 0.0810 | 0.328 | 35.0 ms | 152.4 ms |
+| **GPS-Stream** | 29.15 / 0.9208 / 0.0839 | 0.230 | 29.8 ms | 118.0 ms |
 
-1. We assume that you have already calibrated the cameras using the images of the first frame with COLMAP and obtained the "sparse" folder. We provide an example [custom_data.zip](https://github.com/YaourtB/GPS_plus/blob/main/custom_data.zip) in this repo.
-2. Organize your sequential custom data into the following structure:
-```
-raw_custom_data_root
-├── sparse/
-│   ├── 0/
-│   │   ├── cameras.bin
-│   │   └── images.bin
-├── frame0_cam0.jpg (e.g. 0000_00.jpg)
-├── frame0_cam1.jpg
-├── ...
-├── frame0_camN.jpg
-├── ......
-├── ......
-└── frameT_camN.jpg
-```
-3. You should determine the size (n) of the work set of cameras, which means how many cameras are there between the leftmost and the rightmost. This number can not be too large. Otherwise, the rectification could collapse. Once you set [```/PATH/TO/custom_data```](https://github.com/YaourtB/GPS_plus/blob/main/data_process/step_0rect_custom.py#L124), you can run followings 
-```
-cd data_process
-python step_0rect_custom.py -t train -n 4
-python step_1_custom.py -t train -n 4
+tOF ([TecoGAN](https://arxiv.org/abs/1811.09393)) is the difference between the optical flow of consecutive rendered frames and that of the
+ground truth, a measure of temporal consistency; lower is better. Full results and protocol: [docs/streaming_tile_trt.md](docs/streaming_tile_trt.md).
 
-python step_0rect_custom.py -t val -n 4
-python step_1_custom.py -t val -n 4
-```
-4. You can probably estimate the ```inverse_depth_init``` in [stage.yaml](config/stage.yaml#L15) by reading the output of the distance of the left-most and the right-most cameras. See [here](https://github.com/YaourtB/GPS_plus/blob/main/data_process/step_0rect_custom.py#L245).
-5. Please verify that the correponding pixels of 0.jpg and 1.jpg in the processed data are aligned in the same horizontal line. If it is not the case, the work set size (n) might be too large or the calibration in sparse folder is not good.
-6. You can modify ```train_data_root``` and ```val_data_root``` in [stage.yaml](config/stage.yaml#L17) with your [```/PATH/TO/processed_custom_data```](https://github.com/YaourtB/GPS_plus/blob/main/data_process/step_0rect_custom.py#L125) and train our network from scratch.
-```
-python train.py
-```
-If the results are not good, you could modify ```inverse_depth_init``` in [stage.yaml](config/stage.yaml#L15) or crop the processed images along with modifying the intrinsic parameters as in [here](https://github.com/YaourtB/GPS_plus/blob/main/data_process/step_0rect.py#L84-L90).
+## Where the time goes
 
-# Citation
+TensorRT fp16 on an RTX 3090, per frame (cook_spinach, frames 221-260, rendering excluded):
 
-If you find the code or the data is useful for your research, please consider citing:
-```bibtex
-@article{zhou2024gps,
-  title={GPS-Gaussian+: Generalizable Pixel-wise 3D Gaussian Splatting for Real-Time Human-Scene Rendering from Sparse Views},
-  author={Zhou, Boyao and Zheng, Shunyuan and Tu, Hanzhang and Shao, Ruizhi and Liu, Boning and Zhang, Shengping and Nie, Liqiang and Liu, Yebin},
-  journal={arXiv preprint arXiv:2411.11363},
-  year={2024}
-}
-```
+| Stage | Per-frame | GPS-Stream | Difference |
+|---|---|---|---|
+| Encoder (whole image, both views) | 4.3 ms | 4.9 ms | +0.6 ms |
+| Change selection (STSS) | — | 2.2 ms | +2.2 ms |
+| Epipolar attention, residual block, context net | 4.3 ms | 5.5 ms | +1.2 ms |
+| GRU × 8 and upsampling | 9.9 ms | 6.0 ms | −3.9 ms |
+| Gaussian regressor | 16.9 ms | 10.9 ms | −6.0 ms |
+| **Total** | **35.5 ms** | **29.8 ms** | **−5.7 ms** |
+
+The saving comes from the two heavy stages that now run on the changed tiles only, the GRU and the Gaussian regressor (−9.9 ms together).
+The encoder still runs on the whole frame because the change selector needs its features, and change selection plus the tile bookkeeping
+cost about 4 ms. Per-frame stage times are the stages of the same network as separate engines (35.5 ms in total, 35.0 ms as one engine);
+GPS-Stream stage times are measured inside its complete per-frame pipeline. The PyTorch breakdown is in [docs/streaming_tile_trt.md](docs/streaming_tile_trt.md).
+
+## Limitations
+
+The speedup depends on how much of the frame changes. GPS-Stream targets static cameras with localized motion; with a moving camera or large motion, cost approaches per-frame execution.
+
+## License
+
+GPS-Stream is released under the [MIT License](LICENSE).
+
+- It builds on [GPS-Gaussian+](https://github.com/YaourtB/GPS_plus) by Zhou et al. ([arXiv:2411.11363](https://arxiv.org/abs/2411.11363)), also under the MIT License.
+- The renderer [`diff-gaussian-rasterization`](https://github.com/graphdeco-inria/diff-gaussian-rasterization) is a separate dependency under the
+  [Gaussian-Splatting License](https://github.com/graphdeco-inria/gaussian-splatting/blob/main/LICENSE.md), which allows non-commercial research use only.
